@@ -1,0 +1,329 @@
+-- =====================================================
+-- DELIVERY PARTNER LOGISTICS DATABASE SCHEMA
+-- Complete MySQL Schema for Blockchain-Based Delivery System
+-- =====================================================
+
+DROP DATABASE IF EXISTS delivery_partner_db;
+CREATE DATABASE delivery_partner_db;
+USE delivery_partner_db;
+
+-- 1. USERS TABLE (Authentication & User Management)
+CREATE TABLE users (
+    user_id INT PRIMARY KEY AUTO_INCREMENT,
+    name VARCHAR(255) NOT NULL,
+    email VARCHAR(255) NOT NULL UNIQUE,
+    user_type ENUM('ADMIN', 'DRIVER', 'PRODUCER') NOT NULL,
+    reference_id INT,
+    is_active TINYINT(1) DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_login TIMESTAMP NULL,
+    INDEX idx_email (email),
+    INDEX idx_user_type (user_type),
+    INDEX idx_reference (reference_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 2. PRODUCERS TABLE
+CREATE TABLE producers (
+    producer_id INT PRIMARY KEY AUTO_INCREMENT,
+    producer_name VARCHAR(255) NOT NULL,
+    email VARCHAR(255),
+    phone VARCHAR(20),
+    inventory_latitude DECIMAL(10, 8),
+    inventory_longitude DECIMAL(11, 8),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_location (inventory_latitude, inventory_longitude)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 3. DESTINATIONS TABLE
+CREATE TABLE destinations (
+    destination_id INT PRIMARY KEY AUTO_INCREMENT,
+    destination_name VARCHAR(255) NOT NULL,
+    address TEXT,
+    latitude DECIMAL(10, 8) NOT NULL,
+    longitude DECIMAL(11, 8) NOT NULL,
+    contact_phone VARCHAR(20),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_location (latitude, longitude)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 4. INVENTORY TABLE
+CREATE TABLE inventory (
+    inventory_id INT PRIMARY KEY AUTO_INCREMENT,
+    producer_id INT NOT NULL,
+    item_name VARCHAR(255) NOT NULL,
+    available_quantity INT DEFAULT 0,
+    inventory_latitude DECIMAL(10, 8),
+    inventory_longitude DECIMAL(11, 8),
+    destination_latitude DECIMAL(10, 8),
+    destination_longitude DECIMAL(11, 8),
+    max_delivery_time INT,
+    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (producer_id) REFERENCES producers(producer_id) ON DELETE CASCADE,
+    INDEX idx_producer (producer_id),
+    INDEX idx_quantity (available_quantity)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 5. CONTAINERS TABLE (Delivery Vehicles)
+CREATE TABLE containers (
+    container_id INT PRIMARY KEY AUTO_INCREMENT,
+    container_code VARCHAR(50) NOT NULL UNIQUE,
+    driver_name VARCHAR(255),
+    driver_phone VARCHAR(20),
+    section_storage_space INT DEFAULT 100,
+    total_sections INT NOT NULL,
+    available_sections INT NOT NULL,
+    used_sections INT DEFAULT 0,
+    cost_per_section DECIMAL(10, 2) DEFAULT 0.00,
+    current_latitude DECIMAL(10, 8) NOT NULL,
+    current_longitude DECIMAL(11, 8) NOT NULL,
+    status ENUM('IDLE', 'ACTIVE', 'MAINTENANCE') DEFAULT 'IDLE',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_status (status),
+    INDEX idx_location (current_latitude, current_longitude),
+    INDEX idx_code (container_code)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 6. PACKAGES TABLE
+CREATE TABLE packages (
+    package_id INT PRIMARY KEY AUTO_INCREMENT,
+    package_code VARCHAR(50) NOT NULL UNIQUE,
+    producer_id INT NOT NULL,
+    destination_id INT NOT NULL,
+    required_sections INT DEFAULT 1,
+    deadline DATETIME,
+    max_delivery_time INT,
+    status ENUM('AVAILABLE', 'REQUESTED', 'LOADED', 'DELIVERED', 'CANCELLED') DEFAULT 'AVAILABLE',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (producer_id) REFERENCES producers(producer_id) ON DELETE CASCADE,
+    FOREIGN KEY (destination_id) REFERENCES destinations(destination_id) ON DELETE CASCADE,
+    INDEX idx_status (status),
+    INDEX idx_producer (producer_id),
+    INDEX idx_destination (destination_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 7. ROUTES TABLE
+CREATE TABLE routes (
+    route_id INT PRIMARY KEY AUTO_INCREMENT,
+    container_id INT NOT NULL,
+    algorithm_used ENUM('A_STAR', 'DIJKSTRA', 'GREEDY') DEFAULT 'A_STAR',
+    route_status ENUM('PLANNED', 'ACTIVE', 'COMPLETED', 'CANCELLED') DEFAULT 'PLANNED',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    started_at TIMESTAMP NULL,
+    completed_at TIMESTAMP NULL,
+    FOREIGN KEY (container_id) REFERENCES containers(container_id) ON DELETE CASCADE,
+    INDEX idx_container (container_id),
+    INDEX idx_status (route_status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 8. LOCATION_NODES TABLE (Graph Nodes for Routing)
+CREATE TABLE location_nodes (
+    node_id INT PRIMARY KEY AUTO_INCREMENT,
+    node_type ENUM('PRODUCER', 'DESTINATION', 'DEPOT', 'WAYPOINT') NOT NULL,
+    reference_id INT,
+    latitude DECIMAL(10, 8) NOT NULL,
+    longitude DECIMAL(11, 8) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_type_ref (node_type, reference_id),
+    INDEX idx_location (latitude, longitude)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 9. ROUTE_TASKS TABLE (Priority Queue)
+CREATE TABLE route_tasks (
+    task_id INT PRIMARY KEY AUTO_INCREMENT,
+    route_id INT NOT NULL,
+    task_type ENUM('PICKUP', 'DELIVERY') NOT NULL,
+    node_id INT NOT NULL,
+    package_id INT NOT NULL,
+    priority_order INT NOT NULL,
+    task_status ENUM('PENDING', 'IN_PROGRESS', 'COMPLETED', 'SKIPPED') DEFAULT 'PENDING',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    started_at TIMESTAMP NULL,
+    completed_at TIMESTAMP NULL,
+    FOREIGN KEY (route_id) REFERENCES routes(route_id) ON DELETE CASCADE,
+    FOREIGN KEY (node_id) REFERENCES location_nodes(node_id) ON DELETE CASCADE,
+    FOREIGN KEY (package_id) REFERENCES packages(package_id) ON DELETE CASCADE,
+    INDEX idx_route_priority (route_id, priority_order),
+    INDEX idx_status (task_status),
+    INDEX idx_package (package_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 10. TRANSACTIONS TABLE
+CREATE TABLE transactions (
+    transaction_id INT PRIMARY KEY AUTO_INCREMENT,
+    task_id INT NOT NULL,
+    container_id INT NOT NULL,
+    package_id INT NOT NULL,
+    transaction_type ENUM('LOAD', 'DELIVER') NOT NULL,
+    transaction_status ENUM('REQUESTED', 'APPROVED', 'COMPLETED', 'REJECTED') DEFAULT 'REQUESTED',
+    sections_used INT DEFAULT 1,
+    cost_per_section DECIMAL(10, 2),
+    total_cost DECIMAL(10, 2),
+    distance_km DECIMAL(10, 2),
+    estimated_delivery_time DATETIME,
+    actual_delivery_time DATETIME,
+    blockchain_hash VARCHAR(64),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    approved_at TIMESTAMP NULL,
+    completed_at TIMESTAMP NULL,
+    FOREIGN KEY (task_id) REFERENCES route_tasks(task_id) ON DELETE CASCADE,
+    FOREIGN KEY (container_id) REFERENCES containers(container_id) ON DELETE CASCADE,
+    FOREIGN KEY (package_id) REFERENCES packages(package_id) ON DELETE CASCADE,
+    INDEX idx_status (transaction_status),
+    INDEX idx_blockchain (blockchain_hash),
+    INDEX idx_container (container_id),
+    INDEX idx_package (package_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 11. BLOCKCHAIN TABLE
+CREATE TABLE blockchain (
+    block_id INT PRIMARY KEY AUTO_INCREMENT,
+    block_index INT NOT NULL UNIQUE,
+    timestamp BIGINT NOT NULL,
+    data JSON NOT NULL,
+    previous_hash VARCHAR(64) NOT NULL,
+    hash VARCHAR(64) NOT NULL UNIQUE,
+    nonce INT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_hash (hash),
+    INDEX idx_index (block_index)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 12. ML_MODELS TABLE (Machine Learning Model Storage)
+CREATE TABLE ml_models (
+    model_id INT PRIMARY KEY AUTO_INCREMENT,
+    model_name VARCHAR(100) NOT NULL UNIQUE,
+    model_type VARCHAR(50) NOT NULL,
+    coefficients JSON,
+    normalization JSON,
+    metrics JSON,
+    trained_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    is_active TINYINT(1) DEFAULT 1,
+    INDEX idx_name (model_name),
+    INDEX idx_active (is_active)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 13. MODEL_TRAINING_HISTORY TABLE
+CREATE TABLE model_training_history (
+    history_id INT PRIMARY KEY AUTO_INCREMENT,
+    model_name VARCHAR(100) NOT NULL,
+    training_samples INT,
+    test_samples INT,
+    mae DECIMAL(10, 4),
+    rmse DECIMAL(10, 4),
+    r_squared DECIMAL(10, 6),
+    training_duration_seconds INT,
+    trained_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_model (model_name),
+    INDEX idx_date (trained_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- =====================================================
+-- VIEWS FOR REPORTING
+-- =====================================================
+
+-- Active Routes Summary
+CREATE VIEW active_routes_summary AS
+SELECT 
+    r.route_id,
+    r.container_id,
+    c.container_code,
+    c.driver_name,
+    r.algorithm_used,
+    r.route_status,
+    COUNT(rt.task_id) as total_tasks,
+    SUM(CASE WHEN rt.task_status = 'COMPLETED' THEN 1 ELSE 0 END) as completed_tasks,
+    SUM(CASE WHEN rt.task_status = 'PENDING' THEN 1 ELSE 0 END) as pending_tasks,
+    r.created_at,
+    r.started_at
+FROM routes r
+JOIN containers c ON r.container_id = c.container_id
+LEFT JOIN route_tasks rt ON r.route_id = rt.route_id
+WHERE r.route_status IN ('PLANNED', 'ACTIVE')
+GROUP BY r.route_id;
+
+-- Transactions Summary
+CREATE VIEW transactions_summary AS
+SELECT 
+    t.transaction_id,
+    t.transaction_type,
+    t.transaction_status,
+    c.container_code,
+    p.package_code,
+    prod.producer_name,
+    t.total_cost,
+    t.distance_km,
+    t.blockchain_hash,
+    t.created_at,
+    t.completed_at
+FROM transactions t
+JOIN containers c ON t.container_id = c.container_id
+JOIN packages p ON t.package_id = p.package_id
+JOIN producers prod ON p.producer_id = prod.producer_id;
+
+-- =====================================================
+-- STORED PROCEDURES
+-- =====================================================
+
+DELIMITER //
+
+-- Get Container Availability
+CREATE PROCEDURE GetContainerAvailability(IN p_container_id INT)
+BEGIN
+    SELECT 
+        container_id,
+        container_code,
+        driver_name,
+        total_sections,
+        available_sections,
+        used_sections,
+        ROUND((available_sections * 100.0 / total_sections), 2) as availability_percentage,
+        status,
+        current_latitude,
+        current_longitude
+    FROM containers
+    WHERE container_id = p_container_id;
+END //
+
+-- Get Route Progress
+CREATE PROCEDURE GetRouteProgress(IN p_route_id INT)
+BEGIN
+    SELECT 
+        r.route_id,
+        r.route_status,
+        COUNT(rt.task_id) as total_tasks,
+        SUM(CASE WHEN rt.task_status = 'COMPLETED' THEN 1 ELSE 0 END) as completed_tasks,
+        ROUND((SUM(CASE WHEN rt.task_status = 'COMPLETED' THEN 1 ELSE 0 END) * 100.0 / COUNT(rt.task_id)), 2) as progress_percentage,
+        r.created_at,
+        r.started_at,
+        r.completed_at
+    FROM routes r
+    LEFT JOIN route_tasks rt ON r.route_id = rt.route_id
+    WHERE r.route_id = p_route_id
+    GROUP BY r.route_id;
+END //
+
+DELIMITER ;
+
+-- =====================================================
+-- SAMPLE DATA
+-- =====================================================
+
+-- Insert admin user
+INSERT INTO users (name, email, user_type, is_active) 
+VALUES ('Admin', 'admin@deliverypartner.com', 'ADMIN', 1);
+
+-- Insert sample destinations
+INSERT INTO destinations (destination_name, address, latitude, longitude, contact_phone) VALUES
+('Downtown Warehouse', '123 Main St', 40.7128, -74.0060, '+1234567890'),
+('North Distribution Center', '456 Oak Ave', 40.7589, -73.9851, '+1234567891'),
+('East Logistics Hub', '789 Pine Rd', 40.7306, -73.9352, '+1234567892'),
+('West Storage Facility', '321 Elm St', 40.7484, -74.0323, '+1234567893'),
+('South Depot', '654 Maple Dr', 40.6892, -74.0445, '+1234567894');
+
+-- Usage Examples:
+-- CALL GetContainerAvailability(1);
+-- CALL GetRouteProgress(1);
+-- SELECT * FROM active_routes_summary;
+-- SELECT * FROM transactions_summary WHERE transaction_status = 'COMPLETED';
